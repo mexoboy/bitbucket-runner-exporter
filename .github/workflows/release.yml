@@ -1,0 +1,280 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.23'
+
+      - name: Get version from tag
+        id: version
+        run: echo "VERSION=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
+
+      - name: Run tests
+        run: go test -v ./...
+
+      - name: Build for multiple platforms
+        run: |
+          # Create dist directory
+          mkdir -p dist
+          
+          # Define platforms
+          platforms=(
+            "linux/amd64"
+            "linux/arm64"
+            "linux/386"
+            "linux/arm"
+            "darwin/amd64"
+            "darwin/arm64"
+            "windows/amd64"
+          )
+          
+          for platform in "${platforms[@]}"; do
+            IFS='/' read -r os arch <<< "$platform"
+            
+            # Set binary name
+            binary_name="bitbucket-runner-exporter"
+            if [ "$os" = "windows" ]; then
+              binary_name="${binary_name}.exe"
+            fi
+            
+            # Build binary
+            echo "Building for $os/$arch..."
+            GOOS=$os GOARCH=$arch CGO_ENABLED=0 go build \
+              -ldflags="-s -w -X main.Version=${{ steps.version.outputs.VERSION }}" \
+              -o "dist/${binary_name}" .
+            
+            # Create archive
+            archive_name="bitbucket-runner-exporter-${{ steps.version.outputs.VERSION }}-${os}-${arch}"
+            
+            if [ "$os" = "windows" ]; then
+              cd dist && zip "${archive_name}.zip" "${binary_name}" && cd ..
+            else
+              cd dist && tar -czf "${archive_name}.tar.gz" "${binary_name}" && cd ..
+            fi
+            
+            # Remove binary after archiving
+            rm "dist/${binary_name}"
+          done
+
+      - name: Generate checksums
+        run: |
+          cd dist
+          for file in *; do
+            if [[ "$file" == *.tar.gz ]] || [[ "$file" == *.zip ]]; then
+              sha256sum "$file" >> checksums.txt
+            fi
+          done
+          cat checksums.txt
+
+      - name: Get previous tag
+        id: prev_tag
+        run: |
+          # Get the previous tag (excluding current)
+          PREV_TAG=$(git tag --sort=-version:refname | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | sed -n '2p')
+          if [ -z "$PREV_TAG" ]; then
+            # If no previous tag, use first commit
+            PREV_TAG=$(git rev-list --max-parents=0 HEAD)
+          fi
+          echo "PREV_TAG=$PREV_TAG" >> $GITHUB_OUTPUT
+          echo "Previous tag/commit: $PREV_TAG"
+
+      - name: Generate changelog from commits
+        id: changelog
+        run: |
+          # Create temporary file for changelog
+          TEMP_CHANGELOG=$(mktemp)
+          
+          # Get commits since last tag
+          git log ${{ steps.prev_tag.outputs.PREV_TAG }}..${{ github.ref_name }} \
+            --pretty=format:"COMMIT:%s (%h)" \
+            --reverse \
+            --no-merges > commits.txt
+          
+          # Initialize sections
+          declare -A sections
+          sections["features"]=""
+          sections["fixes"]=""
+          sections["docs"]=""
+          sections["perf"]=""
+          sections["refactor"]=""
+          sections["chore"]=""
+          sections["ci"]=""
+          sections["other"]=""
+          
+          # Process commits
+          while IFS= read -r line; do
+            if [[ $line =~ ^COMMIT:feat(\(.+\))?:\ (.+)\ \(([a-f0-9]+)\)$ ]]; then
+              sections["features"]+="- ${BASH_REMATCH[2]} (${BASH_REMATCH[3]})"$'\n'
+            elif [[ $line =~ ^COMMIT:fix(\(.+\))?:\ (.+)\ \(([a-f0-9]+)\)$ ]]; then
+              sections["fixes"]+="- ${BASH_REMATCH[2]} (${BASH_REMATCH[3]})"$'\n'
+            elif [[ $line =~ ^COMMIT:docs(\(.+\))?:\ (.+)\ \(([a-f0-9]+)\)$ ]]; then
+              sections["docs"]+="- ${BASH_REMATCH[2]} (${BASH_REMATCH[3]})"$'\n'
+            elif [[ $line =~ ^COMMIT:perf(\(.+\))?:\ (.+)\ \(([a-f0-9]+)\)$ ]]; then
+              sections["perf"]+="- ${BASH_REMATCH[2]} (${BASH_REMATCH[3]})"$'\n'
+            elif [[ $line =~ ^COMMIT:refactor(\(.+\))?:\ (.+)\ \(([a-f0-9]+)\)$ ]]; then
+              sections["refactor"]+="- ${BASH_REMATCH[2]} (${BASH_REMATCH[3]})"$'\n'
+            elif [[ $line =~ ^COMMIT:chore(\(.+\))?:\ (.+)\ \(([a-f0-9]+)\)$ ]]; then
+              sections["chore"]+="- ${BASH_REMATCH[2]} (${BASH_REMATCH[3]})"$'\n'
+            elif [[ $line =~ ^COMMIT:ci(\(.+\))?:\ (.+)\ \(([a-f0-9]+)\)$ ]]; then
+              sections["ci"]+="- ${BASH_REMATCH[2]} (${BASH_REMATCH[3]})"$'\n'
+            else
+              # Remove COMMIT: prefix for other commits
+              clean_line=${line#COMMIT:}
+              sections["other"]+="- $clean_line"$'\n'
+            fi
+          done < commits.txt
+          
+          # Build changelog
+          {
+            if [[ -n "${sections[features]}" ]]; then
+              echo "### ✨ Features"
+              echo "${sections[features]}"
+            fi
+            
+            if [[ -n "${sections[fixes]}" ]]; then
+              echo "### 🐛 Bug Fixes"
+              echo "${sections[fixes]}"
+            fi
+            
+            if [[ -n "${sections[perf]}" ]]; then
+              echo "### ⚡ Performance"
+              echo "${sections[perf]}"
+            fi
+            
+            if [[ -n "${sections[refactor]}" ]]; then
+              echo "### ♻️ Refactoring"
+              echo "${sections[refactor]}"
+            fi
+            
+            if [[ -n "${sections[docs]}" ]]; then
+              echo "### 📚 Documentation"
+              echo "${sections[docs]}"
+            fi
+            
+            if [[ -n "${sections[ci]}" ]]; then
+              echo "### 👷 CI/CD"
+              echo "${sections[ci]}"
+            fi
+            
+            if [[ -n "${sections[chore]}" ]]; then
+              echo "### 🔧 Maintenance"
+              echo "${sections[chore]}"
+            fi
+            
+            if [[ -n "${sections[other]}" ]]; then
+              echo "### 🔄 Other Changes"
+              echo "${sections[other]}"
+            fi
+          } > $TEMP_CHANGELOG
+          
+          # Output to GitHub Actions
+          echo "CHANGELOG<<EOF" >> $GITHUB_OUTPUT
+          cat $TEMP_CHANGELOG >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+          
+          # Clean up
+          rm -f commits.txt $TEMP_CHANGELOG
+
+      - name: Generate release notes
+        id: release_notes
+        run: |
+          cat > release_notes.md << 'EOF'
+          ## 🚀 Release ${{ steps.version.outputs.VERSION }}
+          
+          ### 📋 What's Changed
+          
+          ${{ steps.changelog.outputs.CHANGELOG }}
+          
+          ### 📦 Downloads
+          
+          Choose the appropriate binary for your platform:
+          
+          | Platform | Architecture | Download |
+          |----------|-------------|----------|
+          | Linux | x86_64 | [bitbucket-runner-exporter-${{ steps.version.outputs.VERSION }}-linux-amd64.tar.gz](https://github.com/${{ github.repository }}/releases/download/${{ steps.version.outputs.VERSION }}/bitbucket-runner-exporter-${{ steps.version.outputs.VERSION }}-linux-amd64.tar.gz) |
+          | Linux | ARM64 | [bitbucket-runner-exporter-${{ steps.version.outputs.VERSION }}-linux-arm64.tar.gz](https://github.com/${{ github.repository }}/releases/download/${{ steps.version.outputs.VERSION }}/bitbucket-runner-exporter-${{ steps.version.outputs.VERSION }}-linux-arm64.tar.gz) |
+          | Linux | ARM | [bitbucket-runner-exporter-${{ steps.version.outputs.VERSION }}-linux-arm.tar.gz](https://github.com/${{ github.repository }}/releases/download/${{ steps.version.outputs.VERSION }}/bitbucket-runner-exporter-${{ steps.version.outputs.VERSION }}-linux-arm.tar.gz) |
+          | Linux | x86 | [bitbucket-runner-exporter-${{ steps.version.outputs.VERSION }}-linux-386.tar.gz](https://github.com/${{ github.repository }}/releases/download/${{ steps.version.outputs.VERSION }}/bitbucket-runner-exporter-${{ steps.version.outputs.VERSION }}-linux-386.tar.gz) |
+          | macOS | Intel | [bitbucket-runner-exporter-${{ steps.version.outputs.VERSION }}-darwin-amd64.tar.gz](https://github.com/${{ github.repository }}/releases/download/${{ steps.version.outputs.VERSION }}/bitbucket-runner-exporter-${{ steps.version.outputs.VERSION }}-darwin-amd64.tar.gz) |
+          | macOS | Apple Silicon | [bitbucket-runner-exporter-${{ steps.version.outputs.VERSION }}-darwin-arm64.tar.gz](https://github.com/${{ github.repository }}/releases/download/${{ steps.version.outputs.VERSION }}/bitbucket-runner-exporter-${{ steps.version.outputs.VERSION }}-darwin-arm64.tar.gz) |
+          | Windows | x86_64 | [bitbucket-runner-exporter-${{ steps.version.outputs.VERSION }}-windows-amd64.zip](https://github.com/${{ github.repository }}/releases/download/${{ steps.version.outputs.VERSION }}/bitbucket-runner-exporter-${{ steps.version.outputs.VERSION }}-windows-amd64.zip) |
+          
+          ### 🔐 Checksums
+          
+          Verify your downloads with the checksums:
+          ```
+          $(cat dist/checksums.txt)
+          ```
+          
+          ### 🚀 Installation
+          
+          #### Linux/macOS
+          ```bash
+          # Download and extract
+          curl -L https://github.com/${{ github.repository }}/releases/download/${{ steps.version.outputs.VERSION }}/bitbucket-runner-exporter-${{ steps.version.outputs.VERSION }}-linux-amd64.tar.gz | tar xz
+          
+          # Make executable and move to PATH
+          chmod +x bitbucket-runner-exporter
+          sudo mv bitbucket-runner-exporter /usr/local/bin/
+          
+          # Verify installation
+          bitbucket-runner-exporter --help
+          ```
+          
+          #### Windows
+          ```powershell
+          # Download and extract the .zip file, then run
+          .\bitbucket-runner-exporter.exe --help
+          ```
+          
+          ---
+          
+          **Full Changelog**: https://github.com/${{ github.repository }}/compare/${{ steps.prev_tag.outputs.PREV_TAG }}...${{ steps.version.outputs.VERSION }}
+          
+          For detailed usage instructions, see the [README](https://github.com/${{ github.repository }}/blob/main/README.md).
+          EOF
+          
+          echo "release_notes_file=release_notes.md" >> $GITHUB_OUTPUT
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist/*.tar.gz
+            dist/*.zip
+            dist/checksums.txt
+          body_path: release_notes.md
+          draft: false
+          prerelease: false
+          generate_release_notes: false
+          tag_name: ${{ steps.version.outputs.VERSION }}
+          name: Release ${{ steps.version.outputs.VERSION }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-artifacts-${{ steps.version.outputs.VERSION }}
+          path: |
+            dist/*.tar.gz
+            dist/*.zip
+            dist/checksums.txt
+          retention-days: 90

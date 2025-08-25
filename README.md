@@ -83,12 +83,13 @@ Then run:
 
 ## 🛠️ Command Line Options
 
-| Flag | Description | Default | Example |
-|------|-------------|---------|---------|
-| `-port` | Server port | `8080` | `-port 9090` |
-| `-bind` | Bind address | `0.0.0.0` | `-bind 127.0.0.1` |
-| `-extra-label` | Add custom labels (repeatable) | - | `-extra-label "env=prod"` |
-| `-config-file` | Use YAML config file | - | `-config-file config.yml` |
+| Flag           | Description                    | Default   | Example                   |
+|----------------|--------------------------------|-----------|---------------------------|
+| `-port`        | Server port                    | `8080`    | `-port 9090`              |
+| `-bind`        | Bind address                   | `0.0.0.0` | `-bind 127.0.0.1`         |
+| `-extra-label` | Add custom labels (repeatable) | –         | `-extra-label "env=prod"` |
+| `-config-file` | Use YAML config file           | –         | `-config-file config.yml` |
+| `-version`     | Show current version           | –         | –                         |
 
 ## 📊 Metrics Reference
 
@@ -167,7 +168,7 @@ The exporter works by:
 Build containers follow this naming convention:
 ```
 96da62a5-abee-497e-b1f6-7774432a3396_1d1ff376-c967-4ebe-a84f-cd2d56ee0872_build
-├─────────── runner_uui────────────┤ ├────────── pipeline_uuid ─────────┤
+├─────────── runner_uuid ──────────┤ ├───────────── pipeline_uuid ────────────┤
 ```
 
 ## 🚢 Production Deployment

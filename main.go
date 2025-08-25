@@ -23,6 +23,8 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
+const version = "0.1.0"
+
 type extraLabelsFlag []string
 
 func (e *extraLabelsFlag) String() string {
@@ -364,10 +366,16 @@ func main() {
 		port        = flag.String("port", "", "Server port")
 		bind        = flag.String("bind", "", "Bind address")
 		configFile  = flag.String("config-file", "", "Use parameters from config file")
+		showVersion = flag.Bool("version", false, "Show current version")
 		extraLabels extraLabelsFlag
 	)
 	flag.Var(&extraLabels, "extra-label", "Add extra labels to any bitbucket_agent_build metrics")
 	flag.Parse()
+
+	if *showVersion {
+		fmt.Println(version)
+		os.Exit(0)
+	}
 
 	config, err := loadConfig(*configFile)
 	if err != nil {

@@ -94,7 +94,7 @@ basic_auth:
   password: secret123
 bearer_token: mytoken123
 # Optional IP whitelist - restrict access to specific IPs/ranges
-allowed_ips:
+white_list:
   - "192.168.1.100"
   - "10.0.0.0/8"
   - "127.0.0.1"
@@ -190,7 +190,7 @@ Control which IP addresses can access your metrics endpoint for enhanced securit
 
 ```yaml
 # config.yml
-allowed_ips:
+white_list:
   - "192.168.1.100"        # Single IP address
   - "10.0.0.0/8"           # CIDR range
   - "127.0.0.1"            # Localhost

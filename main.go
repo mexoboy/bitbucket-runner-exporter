@@ -25,7 +25,7 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-const version = "0.1.0"
+const version = "0.2.0"
 
 type extraLabelsFlag []string
 
@@ -44,7 +44,7 @@ type Config struct {
 	Labels      map[string]string `yaml:"labels"`
 	BasicAuth   *BasicAuthConfig  `yaml:"basic_auth,omitempty"`
 	BearerToken string            `yaml:"bearer_token,omitempty"`
-	AllowedIPs  []string          `yaml:"allowed_ips,omitempty"`
+	WhiteList   []string          `yaml:"white_list,omitempty"`
 }
 
 type BasicAuthConfig struct {
@@ -347,8 +347,8 @@ func (d *DockerExporter) updateMetrics(ctx context.Context) error {
 	return nil
 }
 
-func isIPAllowed(clientIP string, allowedIPs []string) bool {
-	if len(allowedIPs) == 0 {
+func isIPAllowed(clientIP string, whiteList []string) bool {
+	if len(whiteList) == 0 {
 		return true
 	}
 
@@ -357,7 +357,7 @@ func isIPAllowed(clientIP string, allowedIPs []string) bool {
 		return false
 	}
 
-	for _, allowedIP := range allowedIPs {
+	for _, allowedIP := range whiteList {
 		if strings.Contains(allowedIP, "/") {
 			_, network, err := net.ParseCIDR(allowedIP)
 			if err != nil {
@@ -398,7 +398,7 @@ func getClientIP(r *http.Request) string {
 
 func authenticateRequest(r *http.Request, config *Config) bool {
 	clientIP := getClientIP(r)
-	if !isIPAllowed(clientIP, config.AllowedIPs) {
+	if !isIPAllowed(clientIP, config.WhiteList) {
 		return false
 	}
 
@@ -476,7 +476,7 @@ func main() {
 		basicAuthUser = flag.String("basic-auth-user", "", "Basic auth username")
 		basicAuthPass = flag.String("basic-auth-pass", "", "Basic auth password")
 		bearerToken   = flag.String("bearer-token", "", "Bearer token for authentication")
-		allowedIPsFlag = flag.String("white-list", "", "Comma-separated list of allowed IP addresses/CIDR ranges")
+		whiteListFlag = flag.String("white-list", "", "Comma-separated list of allowed IP addresses/CIDR ranges")
 		extraLabels   extraLabelsFlag
 	)
 	flag.Var(&extraLabels, "extra-label", "Add extra labels to any bitbucket_agent_build metrics")
@@ -530,10 +530,10 @@ func main() {
 		config.BearerToken = *bearerToken
 	}
 
-	if *allowedIPsFlag != "" {
-		config.AllowedIPs = strings.Split(*allowedIPsFlag, ",")
-		for i, ip := range config.AllowedIPs {
-			config.AllowedIPs[i] = strings.TrimSpace(ip)
+	if *whiteListFlag != "" {
+		config.WhiteList = strings.Split(*whiteListFlag, ",")
+		for i, ip := range config.WhiteList {
+			config.WhiteList[i] = strings.TrimSpace(ip)
 		}
 	}
 

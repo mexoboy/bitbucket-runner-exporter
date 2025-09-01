@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io/ioutil"
 	"log"
+	"net"
 	"net/http"
 	"os"
 	"regexp"
@@ -43,6 +44,7 @@ type Config struct {
 	Labels      map[string]string `yaml:"labels"`
 	BasicAuth   *BasicAuthConfig  `yaml:"basic_auth,omitempty"`
 	BearerToken string            `yaml:"bearer_token,omitempty"`
+	AllowedIPs  []string          `yaml:"allowed_ips,omitempty"`
 }
 
 type BasicAuthConfig struct {
@@ -345,7 +347,61 @@ func (d *DockerExporter) updateMetrics(ctx context.Context) error {
 	return nil
 }
 
+func isIPAllowed(clientIP string, allowedIPs []string) bool {
+	if len(allowedIPs) == 0 {
+		return true
+	}
+
+	clientIPParsed := net.ParseIP(clientIP)
+	if clientIPParsed == nil {
+		return false
+	}
+
+	for _, allowedIP := range allowedIPs {
+		if strings.Contains(allowedIP, "/") {
+			_, network, err := net.ParseCIDR(allowedIP)
+			if err != nil {
+				continue
+			}
+			if network.Contains(clientIPParsed) {
+				return true
+			}
+		} else {
+			allowedIPParsed := net.ParseIP(allowedIP)
+			if allowedIPParsed != nil && allowedIPParsed.Equal(clientIPParsed) {
+				return true
+			}
+		}
+	}
+
+	return false
+}
+
+func getClientIP(r *http.Request) string {
+	xForwardedFor := r.Header.Get("X-Forwarded-For")
+	if xForwardedFor != "" {
+		ips := strings.Split(xForwardedFor, ",")
+		return strings.TrimSpace(ips[0])
+	}
+
+	xRealIP := r.Header.Get("X-Real-IP")
+	if xRealIP != "" {
+		return xRealIP
+	}
+
+	host, _, err := net.SplitHostPort(r.RemoteAddr)
+	if err != nil {
+		return r.RemoteAddr
+	}
+	return host
+}
+
 func authenticateRequest(r *http.Request, config *Config) bool {
+	clientIP := getClientIP(r)
+	if !isIPAllowed(clientIP, config.AllowedIPs) {
+		return false
+	}
+
 	if config.BasicAuth == nil && config.BearerToken == "" {
 		return true
 	}
@@ -420,6 +476,7 @@ func main() {
 		basicAuthUser = flag.String("basic-auth-user", "", "Basic auth username")
 		basicAuthPass = flag.String("basic-auth-pass", "", "Basic auth password")
 		bearerToken   = flag.String("bearer-token", "", "Bearer token for authentication")
+		allowedIPsFlag = flag.String("white-list", "", "Comma-separated list of allowed IP addresses/CIDR ranges")
 		extraLabels   extraLabelsFlag
 	)
 	flag.Var(&extraLabels, "extra-label", "Add extra labels to any bitbucket_agent_build metrics")
@@ -471,6 +528,13 @@ func main() {
 
 	if *bearerToken != "" {
 		config.BearerToken = *bearerToken
+	}
+
+	if *allowedIPsFlag != "" {
+		config.AllowedIPs = strings.Split(*allowedIPsFlag, ",")
+		for i, ip := range config.AllowedIPs {
+			config.AllowedIPs[i] = strings.TrimSpace(ip)
+		}
 	}
 
 	for _, label := range extraLabels {

@@ -18,6 +18,7 @@ Ever wondered how your Bitbucket runners are performing? This lightweight export
 - 🐳 **Docker native** - Monitors Docker containers directly
 - 🎨 **Prometheus ready** - Works seamlessly with your existing monitoring stack
 - 🔐 **Authentication support** - Basic auth and bearer token authentication
+- 🛡️ **IP Whitelist** - Restrict access to specific IP addresses or CIDR ranges
 
 ## 🚀 Quick Start
 
@@ -68,6 +69,10 @@ go build -o bitbucket-runner-exporter
 # With bearer token authentication
 ./bitbucket-runner-exporter \
   -bearer-token mytoken123
+
+# With IP whitelist (restrict to specific IPs)
+./bitbucket-runner-exporter \
+  -white-list "192.168.1.100,10.0.0.0/8,127.0.0.1"
 ```
 
 ### Configuration File
@@ -88,6 +93,12 @@ basic_auth:
   username: admin
   password: secret123
 bearer_token: mytoken123
+# Optional IP whitelist - restrict access to specific IPs/ranges
+allowed_ips:
+  - "192.168.1.100"
+  - "10.0.0.0/8"
+  - "127.0.0.1"
+  - "203.0.113.0/24"
 ```
 
 Then run:
@@ -157,18 +168,67 @@ bearer_token: mytoken123
 
 By default, no authentication is required. To disable authentication, simply don't configure any auth methods.
 
+## 🛡️ IP Whitelist
+
+Control which IP addresses can access your metrics endpoint for enhanced security.
+
+### Command Line Usage
+
+```bash
+# Allow specific IPs and CIDR ranges
+./bitbucket-runner-exporter \
+  -white-list "192.168.1.100,10.0.0.0/8,127.0.0.1"
+
+# Combined with authentication
+./bitbucket-runner-exporter \
+  -basic-auth-user admin \
+  -basic-auth-pass secret123 \
+  -white-list "192.168.1.0/24,10.0.0.100"
+```
+
+### Configuration File Usage
+
+```yaml
+# config.yml
+allowed_ips:
+  - "192.168.1.100"        # Single IP address
+  - "10.0.0.0/8"           # CIDR range
+  - "127.0.0.1"            # Localhost
+  - "203.0.113.0/24"       # Another CIDR range
+```
+
+### How It Works
+
+- **IP Detection**: Automatically detects client IP from `X-Forwarded-For`, `X-Real-IP`, or `RemoteAddr` headers
+- **Format Support**: Supports both individual IP addresses and CIDR notation ranges
+- **Security First**: IP whitelist is checked BEFORE authentication - blocked IPs are rejected immediately
+- **Default Behavior**: If no whitelist is configured, all IPs are allowed (backward compatible)
+- **Proxy Friendly**: Works correctly behind reverse proxies and load balancers
+
+### Access Examples
+
+```bash
+# These will be allowed (assuming they're in your whitelist):
+curl -u admin:secret123 http://localhost:8080/metrics  # From 127.0.0.1
+curl -u admin:secret123 http://192.168.1.50:8080/metrics  # From 192.168.1.0/24
+
+# These will be blocked with 401 Unauthorized:
+curl -u admin:secret123 http://external-host:8080/metrics  # From blocked IP
+```
+
 ## 🛠️ Command Line Options
 
-| Flag                | Description                         | Default   | Example                        |
-|---------------------|-------------------------------------|-----------|--------------------------------|
-| `-port`             | Server port                         | `8080`    | `-port 9090`                   |
-| `-bind`             | Bind address                        | `0.0.0.0` | `-bind 127.0.0.1`              |
-| `-basic-auth-user`  | Basic auth username                 | –         | `-basic-auth-user admin`       |
-| `-basic-auth-pass`  | Basic auth password                 | –         | `-basic-auth-pass secret`      |
-| `-bearer-token`     | Bearer token for authentication     | –         | `-bearer-token mytoken123`     |
-| `-extra-label`      | Add custom labels (repeatable)      | –         | `-extra-label "env=prod"`      |
-| `-config-file`      | Use YAML config file                | –         | `-config-file config.yml`      |
-| `-version`          | Show current version                | –         | –                              |
+| Flag                | Description                         | Default   | Example                              |
+|---------------------|-------------------------------------|-----------|--------------------------------------|
+| `-port`             | Server port                         | `8080`    | `-port 9090`                         |
+| `-bind`             | Bind address                        | `0.0.0.0` | `-bind 127.0.0.1`                    |
+| `-basic-auth-user`  | Basic auth username                 | –         | `-basic-auth-user admin`             |
+| `-basic-auth-pass`  | Basic auth password                 | –         | `-basic-auth-pass secret`            |
+| `-bearer-token`     | Bearer token for authentication     | –         | `-bearer-token mytoken123`           |
+| `-white-list`       | Comma-separated allowed IPs/CIDRs   | –         | `-white-list "127.0.0.1,10.0.0.0/8"` |
+| `-extra-label`      | Add custom labels (repeatable)      | –         | `-extra-label "env=prod"`            |
+| `-config-file`      | Use YAML config file                | –         | `-config-file config.yml`            |
+| `-version`          | Show current version                | –         | –                                    |
 
 ## 📊 Metrics Reference
 

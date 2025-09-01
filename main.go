@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"crypto/subtle"
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -37,9 +38,16 @@ func (e *extraLabelsFlag) Set(value string) error {
 }
 
 type Config struct {
-	Port   string            `yaml:"port"`
-	Bind   string            `yaml:"bind"`
-	Labels map[string]string `yaml:"labels"`
+	Port        string            `yaml:"port"`
+	Bind        string            `yaml:"bind"`
+	Labels      map[string]string `yaml:"labels"`
+	BasicAuth   *BasicAuthConfig  `yaml:"basic_auth,omitempty"`
+	BearerToken string            `yaml:"bearer_token,omitempty"`
+}
+
+type BasicAuthConfig struct {
+	Username string `yaml:"username"`
+	Password string `yaml:"password"`
 }
 
 func loadConfig(filename string) (*Config, error) {
@@ -337,15 +345,57 @@ func (d *DockerExporter) updateMetrics(ctx context.Context) error {
 	return nil
 }
 
-func (d *DockerExporter) metricsHandler(w http.ResponseWriter, r *http.Request) {
-	ctx := context.Background()
-	if err := d.updateMetrics(ctx); err != nil {
-		log.Printf("Error updating metrics: %v", err)
-		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
-		return
+func authenticateRequest(r *http.Request, config *Config) bool {
+	if config.BasicAuth == nil && config.BearerToken == "" {
+		return true
 	}
 
-	promhttp.Handler().ServeHTTP(w, r)
+	if config.BasicAuth != nil {
+		username, password, ok := r.BasicAuth()
+		if ok {
+			expectedUsername := config.BasicAuth.Username
+			expectedPassword := config.BasicAuth.Password
+			
+			usernameMatch := subtle.ConstantTimeCompare([]byte(username), []byte(expectedUsername)) == 1
+			passwordMatch := subtle.ConstantTimeCompare([]byte(password), []byte(expectedPassword)) == 1
+			
+			if usernameMatch && passwordMatch {
+				return true
+			}
+		}
+	}
+
+	if config.BearerToken != "" {
+		authHeader := r.Header.Get("Authorization")
+		if strings.HasPrefix(authHeader, "Bearer ") {
+			token := strings.TrimPrefix(authHeader, "Bearer ")
+			tokenMatch := subtle.ConstantTimeCompare([]byte(token), []byte(config.BearerToken)) == 1
+			if tokenMatch {
+				return true
+			}
+		}
+	}
+
+	return false
+}
+
+func (d *DockerExporter) metricsHandler(config *Config) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if !authenticateRequest(r, config) {
+			w.Header().Set("WWW-Authenticate", `Basic realm="Metrics"`)
+			http.Error(w, "Unauthorized", http.StatusUnauthorized)
+			return
+		}
+
+		ctx := context.Background()
+		if err := d.updateMetrics(ctx); err != nil {
+			log.Printf("Error updating metrics: %v", err)
+			http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+			return
+		}
+
+		promhttp.Handler().ServeHTTP(w, r)
+	}
 }
 
 func registerMetrics() {
@@ -367,7 +417,10 @@ func main() {
 		bind        = flag.String("bind", "", "Bind address")
 		configFile  = flag.String("config-file", "", "Use parameters from config file")
 		showVersion = flag.Bool("version", false, "Show current version")
-		extraLabels extraLabelsFlag
+		basicAuthUser = flag.String("basic-auth-user", "", "Basic auth username")
+		basicAuthPass = flag.String("basic-auth-pass", "", "Basic auth password")
+		bearerToken   = flag.String("bearer-token", "", "Bearer token for authentication")
+		extraLabels   extraLabelsFlag
 	)
 	flag.Var(&extraLabels, "extra-label", "Add extra labels to any bitbucket_agent_build metrics")
 	flag.Parse()
@@ -404,6 +457,22 @@ func main() {
 		extraLabelValues = append(extraLabelValues, value)
 	}
 
+	if (*basicAuthUser != "" && *basicAuthPass == "") || (*basicAuthUser == "" && *basicAuthPass != "") {
+		log.Fatalf("Both basic-auth-user and basic-auth-pass must be provided together")
+	}
+
+	if *basicAuthUser != "" && *basicAuthPass != "" {
+		if config.BasicAuth == nil {
+			config.BasicAuth = &BasicAuthConfig{}
+		}
+		config.BasicAuth.Username = *basicAuthUser
+		config.BasicAuth.Password = *basicAuthPass
+	}
+
+	if *bearerToken != "" {
+		config.BearerToken = *bearerToken
+	}
+
 	for _, label := range extraLabels {
 		parts := strings.SplitN(label, "=", 2)
 		if len(parts) == 2 {
@@ -434,7 +503,7 @@ func main() {
 		log.Fatalf("Failed to create docker exporter: %v", err)
 	}
 
-	http.HandleFunc("/metrics", exporter.metricsHandler)
+	http.HandleFunc("/metrics", exporter.metricsHandler(config))
 	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/html")
 		fmt.Fprintf(w, `<html>

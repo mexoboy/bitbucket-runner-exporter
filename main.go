@@ -25,7 +25,7 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-const version = "0.2.0"
+const version = "0.2.1"
 
 type extraLabelsFlag []string
 
@@ -278,7 +278,9 @@ func (d *DockerExporter) updateMetrics(ctx context.Context) error {
 
 	container, err := d.findBuildContainer(ctx)
 	if err != nil {
-		return fmt.Errorf("failed to find build container: %w", err)
+		emptyLabels := make([]string, len(extraLabelNames)+2)
+		buildStatus.WithLabelValues(emptyLabels...).Set(0)
+		return nil
 	}
 
 	if container == nil {
@@ -309,7 +311,8 @@ func (d *DockerExporter) updateMetrics(ctx context.Context) error {
 
 	stats, err := d.getContainerStats(ctx, container.ID)
 	if err != nil {
-		return fmt.Errorf("failed to get container stats: %w", err)
+		buildStatus.WithLabelValues(labels...).Set(0)
+		return nil
 	}
 
 	cpuUsage := d.calculateCPUUsage(stats)
@@ -411,10 +414,10 @@ func authenticateRequest(r *http.Request, config *Config) bool {
 		if ok {
 			expectedUsername := config.BasicAuth.Username
 			expectedPassword := config.BasicAuth.Password
-			
+
 			usernameMatch := subtle.ConstantTimeCompare([]byte(username), []byte(expectedUsername)) == 1
 			passwordMatch := subtle.ConstantTimeCompare([]byte(password), []byte(expectedPassword)) == 1
-			
+
 			if usernameMatch && passwordMatch {
 				return true
 			}
@@ -469,10 +472,10 @@ func registerMetrics() {
 
 func main() {
 	var (
-		port        = flag.String("port", "", "Server port")
-		bind        = flag.String("bind", "", "Bind address")
-		configFile  = flag.String("config-file", "", "Use parameters from config file")
-		showVersion = flag.Bool("version", false, "Show current version")
+		port          = flag.String("port", "", "Server port")
+		bind          = flag.String("bind", "", "Bind address")
+		configFile    = flag.String("config-file", "", "Use parameters from config file")
+		showVersion   = flag.Bool("version", false, "Show current version")
 		basicAuthUser = flag.String("basic-auth-user", "", "Basic auth username")
 		basicAuthPass = flag.String("basic-auth-pass", "", "Basic auth password")
 		bearerToken   = flag.String("bearer-token", "", "Bearer token for authentication")

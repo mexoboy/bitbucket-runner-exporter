@@ -25,7 +25,7 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-const version = "0.2.1"
+const version = "0.2.2"
 
 type extraLabelsFlag []string
 
@@ -240,8 +240,15 @@ func (d *DockerExporter) calculateCPUUsage(stats *container.Stats) float64 {
 	systemDelta := float64(stats.CPUStats.SystemUsage - stats.PreCPUStats.SystemUsage)
 
 	if systemDelta > 0 && cpuDelta > 0 {
-		cpuPercent := (cpuDelta / systemDelta) * float64(len(stats.CPUStats.CPUUsage.PercpuUsage))
-		return cpuPercent
+		cpuPercent := (cpuDelta / systemDelta) * 100.0
+		numCPUs := float64(len(stats.CPUStats.CPUUsage.PercpuUsage))
+		if numCPUs == 0 {
+			numCPUs = float64(stats.CPUStats.OnlineCPUs)
+		}
+		if numCPUs > 0 {
+			cpuUsageInCores := (cpuPercent / 100.0) * numCPUs
+			return float64(int(cpuUsageInCores*100+0.5)) / 100.0
+		}
 	}
 	return 0
 }
